@@ -60,6 +60,7 @@ fn rebuild_list(webview: &WebView, apps: &[ManagedApp]) {
     for app in apps {
         script.push_str(&js_add_app(app.path.to_string_lossy().as_ref()));
     }
+    script.push_str("toggleEmptyState();");
     let _ = webview.evaluate_script(&script);
 }
 
@@ -73,22 +74,350 @@ fn main() {
 
     let html = r#"
     <!DOCTYPE html>
-    <html>
-      <head><meta charset='utf-8'><title>Dock Dodger</title></head>
-      <body>
-        <h1>Dock Dodger</h1>
-        <p>将 .app 拖入窗口以隐藏 Dock 图标。</p>
-        <ul id='list'></ul>
-        <script>
-          function addApp(path){
-            const li=document.createElement('li');
-            li.textContent=path;
-            const btn=document.createElement('button');
-            btn.textContent='恢复';
-            btn.onclick=()=>window.ipc.postMessage(JSON.stringify({cmd:'restore', path}));
-            li.appendChild(btn);
-            document.getElementById('list').appendChild(li);
+    <html lang="zh-CN">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Dock Dodger</title>
+        <style>
+          :root {
+            color-scheme: light dark;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
           }
+
+          * {
+            box-sizing: border-box;
+          }
+
+          body {
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 32px;
+            background: linear-gradient(135deg, #dbeafe 0%, #ede9fe 45%, #e0f2fe 100%);
+            color: #0f172a;
+          }
+
+          .wrapper {
+            width: min(560px, 100%);
+            background: rgba(255, 255, 255, 0.85);
+            border-radius: 24px;
+            box-shadow: 0 20px 45px rgba(15, 23, 42, 0.15);
+            padding: 32px 36px;
+            backdrop-filter: blur(18px);
+          }
+
+          .hero {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            margin-bottom: 24px;
+          }
+
+          .icon-circle {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            color: #ffffff;
+            background: linear-gradient(135deg, #60a5fa, #6366f1);
+            box-shadow: 0 15px 35px rgba(99, 102, 241, 0.35);
+            flex-shrink: 0;
+          }
+
+          h1 {
+            margin: 0;
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+          }
+
+          .subtitle {
+            margin: 10px 0 0;
+            color: #475569;
+            line-height: 1.6;
+          }
+
+          .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            text-align: center;
+            padding: 40px 24px;
+            border-radius: 20px;
+            border: 2px dashed rgba(59, 130, 246, 0.35);
+            background: rgba(59, 130, 246, 0.08);
+            color: #475569;
+            margin-bottom: 28px;
+            transition: border-color 0.25s ease, transform 0.25s ease, background 0.25s ease;
+          }
+
+          .empty-state.hidden {
+            display: none;
+          }
+
+          .empty-icon {
+            font-size: 36px;
+          }
+
+          .empty-state h2 {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+            color: #1d4ed8;
+          }
+
+          .empty-state p {
+            margin: 0;
+            line-height: 1.6;
+            max-width: 360px;
+          }
+
+          .app-list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+          }
+
+          .app-item {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            background: rgba(248, 250, 252, 0.95);
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            border-radius: 18px;
+            padding: 16px 20px;
+            box-shadow: 0 10px 25px rgba(15, 23, 42, 0.12);
+            transition: transform 0.18s ease, box-shadow 0.18s ease;
+          }
+
+          .app-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 18px 32px rgba(59, 130, 246, 0.18);
+          }
+
+          .app-info {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 0;
+          }
+
+          .app-name {
+            font-weight: 600;
+            font-size: 17px;
+            color: #1d4ed8;
+            letter-spacing: 0.2px;
+          }
+
+          .app-path {
+            font-size: 13px;
+            color: #64748b;
+            word-break: break-all;
+          }
+
+          .restore-btn {
+            border: none;
+            padding: 10px 18px;
+            border-radius: 999px;
+            font-weight: 600;
+            font-size: 14px;
+            background: linear-gradient(135deg, #6366f1, #3b82f6);
+            color: #ffffff;
+            cursor: pointer;
+            box-shadow: 0 12px 24px rgba(59, 130, 246, 0.28);
+            transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+            flex-shrink: 0;
+          }
+
+          .restore-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 16px 32px rgba(37, 99, 235, 0.35);
+            filter: brightness(1.03);
+          }
+
+          .restore-btn:active {
+            transform: translateY(0);
+            box-shadow: 0 8px 18px rgba(37, 99, 235, 0.35);
+          }
+
+          .hint {
+            margin-top: 30px;
+            font-size: 12px;
+            text-align: center;
+            color: #64748b;
+            line-height: 1.6;
+          }
+
+          body.dragging .empty-state {
+            border-color: rgba(37, 99, 235, 0.75);
+            background: rgba(59, 130, 246, 0.15);
+            transform: scale(1.01);
+          }
+
+          @media (prefers-color-scheme: dark) {
+            body {
+              background: radial-gradient(circle at top, #0f172a, #020617 65%);
+              color: #e2e8f0;
+            }
+
+            .wrapper {
+              background: rgba(15, 23, 42, 0.78);
+              box-shadow: 0 22px 50px rgba(2, 6, 23, 0.65);
+            }
+
+            .subtitle {
+              color: #cbd5f5;
+            }
+
+            .empty-state {
+              border-color: rgba(96, 165, 250, 0.55);
+              background: rgba(59, 130, 246, 0.16);
+              color: #cbd5f5;
+            }
+
+            .empty-state h2 {
+              color: #93c5fd;
+            }
+
+            .app-item {
+              background: rgba(15, 23, 42, 0.9);
+              border-color: rgba(148, 163, 184, 0.2);
+              box-shadow: 0 16px 28px rgba(2, 6, 23, 0.6);
+            }
+
+            .app-path {
+              color: #94a3b8;
+            }
+
+            .hint {
+              color: #94a3b8;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <main class="wrapper">
+          <header class="hero">
+            <div class="icon-circle">🛶</div>
+            <div>
+              <h1>Dock Dodger</h1>
+              <p class="subtitle">将 .app 包拖放到下方区域即可隐藏 Dock 图标，恢复后会立刻重新显示。</p>
+            </div>
+          </header>
+          <section id="empty-state" class="empty-state">
+            <div class="empty-icon">📦</div>
+            <h2>把应用拖到这里</h2>
+            <p>支持 macOS 的 .app 包。放下后会自动修改 Info.plist 中的 LSUIElement 字段。</p>
+          </section>
+          <ul id="list" class="app-list"></ul>
+          <footer class="hint">
+            <p>提示：恢复按钮会撤销隐藏效果，并刷新列表。若操作失败，请查看终端日志。</p>
+          </footer>
+        </main>
+        <script>
+          function extractAppName(path) {
+            if (!path) return "";
+            const segments = path.split("/").filter(Boolean);
+            if (segments.length === 0) {
+              return path;
+            }
+            const last = segments[segments.length - 1];
+            return last.replace(/\.app$/i, "");
+          }
+
+          function toggleEmptyState() {
+            const list = document.getElementById("list");
+            const emptyState = document.getElementById("empty-state");
+            if (!list || !emptyState) {
+              return;
+            }
+            if (list.children.length === 0) {
+              emptyState.classList.remove("hidden");
+            } else {
+              emptyState.classList.add("hidden");
+            }
+          }
+
+          function createRestoreButton(path) {
+            const button = document.createElement("button");
+            button.className = "restore-btn";
+            button.type = "button";
+            button.textContent = "恢复显示";
+            button.addEventListener("click", function () {
+              window.ipc.postMessage(JSON.stringify({ cmd: "restore", path }));
+            });
+            return button;
+          }
+
+          function addApp(path) {
+            const list = document.getElementById("list");
+            if (!list) {
+              return;
+            }
+
+            const item = document.createElement("li");
+            item.className = "app-item";
+
+            const info = document.createElement("div");
+            info.className = "app-info";
+
+            const name = document.createElement("div");
+            name.className = "app-name";
+            name.textContent = extractAppName(path);
+
+            const fullPath = document.createElement("div");
+            fullPath.className = "app-path";
+            fullPath.textContent = path;
+
+            info.appendChild(name);
+            info.appendChild(fullPath);
+
+            item.appendChild(info);
+            item.appendChild(createRestoreButton(path));
+            list.appendChild(item);
+
+            toggleEmptyState();
+          }
+
+          document.addEventListener("DOMContentLoaded", function () {
+            toggleEmptyState();
+          });
+
+          document.addEventListener("dragover", function (event) {
+            event.preventDefault();
+            document.body.classList.add("dragging");
+          });
+
+          document.addEventListener("dragenter", function () {
+            document.body.classList.add("dragging");
+          });
+
+          document.addEventListener("dragleave", function (event) {
+            if (event.target === document.body || event.clientX <= 0 || event.clientY <= 0 || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight) {
+              document.body.classList.remove("dragging");
+            }
+          });
+
+          document.addEventListener("drop", function (event) {
+            event.preventDefault();
+            document.body.classList.remove("dragging");
+          });
+
+          document.addEventListener("dragend", function () {
+            document.body.classList.remove("dragging");
+          });
         </script>
       </body>
     </html>
